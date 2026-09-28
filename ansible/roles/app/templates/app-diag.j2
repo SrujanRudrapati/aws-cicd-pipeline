@@ -1,0 +1,6 @@
+#!/bin/sh
+# {{ ansible_managed }} (role: app)
+# Re-run the same process/socket/limit checks that gate a deploy in CI,
+# against the live container:   sudo app-diag [--json -] [--strict]
+exec docker exec {{ app_container_name }} python /opt/diag/sysdiag.py \
+  --port {{ app_port }} --expect-workers {{ app_web_concurrency }} "$@"

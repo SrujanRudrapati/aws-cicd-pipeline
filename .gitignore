@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+reports/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+.build/
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Never commit real secrets or personal settings
+*.auto.tfvars
+secret*.tfvars
+
+# Ansible
+ansible/.ansible/
+*.retry
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

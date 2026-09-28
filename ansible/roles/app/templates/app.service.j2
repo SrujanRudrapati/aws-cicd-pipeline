@@ -1,0 +1,30 @@
+# {{ ansible_managed }} (role: app)
+[Unit]
+Description=Application container ({{ app_image }})
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Environment=HOME=/root
+TimeoutStartSec=300
+Restart=always
+RestartSec=5
+
+ExecStartPre=-/usr/bin/docker rm -f {{ app_container_name }}
+ExecStartPre=/bin/sh -c 'aws ecr get-login-password --region {{ app_aws_region }} | docker login --username AWS --password-stdin {{ app_image.split("/")[0] }}'
+ExecStartPre=/usr/bin/docker pull {{ app_image }}
+ExecStart=/usr/bin/docker run --rm --name {{ app_container_name }} \
+  --env-file /etc/app/app.env \
+  --publish {{ app_port }}:{{ app_port }} \
+  --ulimit nofile={{ app_nofile_limit }}:{{ app_nofile_limit }} \
+  --log-driver awslogs \
+  --log-opt awslogs-region={{ app_aws_region }} \
+  --log-opt awslogs-group={{ app_log_group }} \
+  --log-opt awslogs-stream=%H \
+  {{ app_image }}
+# Give gunicorn time to finish in-flight requests (its graceful_timeout is 20s).
+ExecStop=/usr/bin/docker stop --time 30 {{ app_container_name }}
+
+[Install]
+WantedBy=multi-user.target

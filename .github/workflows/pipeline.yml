@@ -1,0 +1,181 @@
+# test -> iac checks -> build + verify image -> push to ECR -> deploy dev -> deploy prod
+#
+# Pull requests run everything up to "verify image" (no AWS access at all).
+# Pushes to main also push the image and roll it out, dev first, then prod
+# behind the "prod" environment's required reviewers.
+# Rollback: run this workflow manually with image_tag = an earlier commit SHA.
+# Until the AWS_ROLE_ARN repository variable is set, push and deploy are
+# skipped and the pipeline runs as CI only.
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Redeploy this existing image tag (a commit SHA) instead of building. Use it to roll back."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  # Superseded PR runs are cancelled; runs on main queue so no deploy is skipped halfway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  TERRAFORM_VERSION: "~1.16.0"
+  IMAGE_NAME: aws-cicd-pipeline-app
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - run: make install
+      - run: make lint-python
+      - run: make test
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: reports/
+          if-no-files-found: ignore
+
+  iac:
+    name: terraform / ansible / shell checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-lint.txt
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - run: make install-lint
+      # fmt, validate, network module tests, and full-stack plan tests for
+      # dev and prod against a mocked AWS provider (no credentials).
+      - run: make tf-validate
+      - run: make lint-ansible
+      - run: make lint-shell
+
+  build:
+    name: build + verify image
+    needs: [test, iac]
+    # Skipped when redeploying an existing tag.
+    if: ${{ !inputs.image_tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # OIDC -> AWS, used only by the push step on main
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - id: meta
+        name: Image tag = commit SHA
+        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/Dockerfile
+          build-args: APP_VERSION=${{ steps.meta.outputs.tag }}
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Starts the container, load tests it against latency/error budgets and
+      # compares process/socket/fd diagnostics before vs after the load.
+      - name: Verify (performance + systems diagnostics)
+        run: make verify IMAGE_TAG="${{ steps.meta.outputs.tag }}"
+
+      - name: Upload verification reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-verification
+          path: reports/
+          if-no-files-found: ignore
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Push to ECR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: make push IMAGE_TAG="${{ steps.meta.outputs.tag }}"
+
+  deploy-dev:
+    name: dev
+    needs: [test, iac, build]
+    if: >-
+      ${{
+        !cancelled()
+        && github.event_name != 'pull_request'
+        && github.ref == 'refs/heads/main'
+        && vars.AWS_ROLE_ARN != ''
+        && needs.test.result == 'success'
+        && needs.iac.result == 'success'
+        && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.image_tag != ''))
+      }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      image_tag: ${{ inputs.image_tag || needs.build.outputs.image_tag }}
+
+  deploy-prod:
+    name: prod
+    needs: [build, deploy-dev]
+    if: ${{ !cancelled() && needs.deploy-dev.result == 'success' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      image_tag: ${{ inputs.image_tag || needs.build.outputs.image_tag }}

@@ -1,0 +1,19 @@
+---
+base_packages:
+  - lsof      # open files / sockets per process
+  - strace    # syscall tracing
+  - sysstat   # sar, iostat, pidstat
+  - jq
+
+# Kernel network settings for a host that terminates many short-lived
+# connections from the load balancer.
+base_sysctl:
+  net.core.somaxconn: 4096               # cap on listen() backlog / accept queue
+  net.ipv4.tcp_max_syn_backlog: 4096     # half-open connections
+  net.ipv4.ip_local_port_range: "10240 65535"
+  net.ipv4.tcp_tw_reuse: 1               # reuse TIME_WAIT for outbound (DB, AWS APIs)
+  net.ipv4.tcp_fin_timeout: 15
+  vm.swappiness: 10
+
+base_nofile_limit: 65536
+base_journald_max_use: 200M

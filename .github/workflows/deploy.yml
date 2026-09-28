@@ -1,0 +1,76 @@
+# Reusable deploy job: one environment, one already-pushed image tag.
+# Called by pipeline.yml for dev and then prod. Protection rules (required
+# reviewers, branch restrictions) live on the GitHub Environment itself.
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: dev or prod
+        required: true
+        type: string
+      image_tag:
+        description: Image tag in ECR (commit SHA)
+        required: true
+        type: string
+    outputs:
+      app_url:
+        description: URL the environment serves on
+        value: ${{ jobs.deploy.outputs.app_url }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.environment }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.deploy.outputs.app_url }}
+    # Never run two applies against the same state; never cancel one midway.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      app_url: ${{ steps.deploy.outputs.app_url }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      # Inputs go through env, never straight into the script text.
+      DEPLOY_ENV: ${{ inputs.environment }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.16.0"
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ inputs.environment }}-${{ github.run_id }}
+
+      # plan -> apply -> wait for the rolling instance refresh -> smoke test
+      - id: deploy
+        name: Deploy ${{ inputs.image_tag }}
+        run: bash scripts/ci/deploy.sh "$DEPLOY_ENV"
+
+      - name: Upload deploy reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-${{ inputs.environment }}
+          path: reports/
+          if-no-files-found: ignore

@@ -1,0 +1,56 @@
+#!/bin/bash
+# shellcheck disable=SC2154  # the braced variables are filled in by Terraform templatefile()
+# First-boot bootstrap, rendered by Terraform (templatefile).
+# Everything host-level lives in the Ansible playbook; this script only gets
+# Ansible onto the box, fetches the pinned playbook bundle and runs it.
+#
+# If any step fails the instance never passes ALB health checks, so the ASG
+# replaces it and an in-progress instance refresh rolls back.
+set -euo pipefail
+exec > >(tee -a /var/log/app-bootstrap.log) 2>&1
+echo "bootstrap: start $(date --iso-8601=seconds)"
+
+retry() {
+  local attempt=1
+  until "$@"; do
+    if [ "$attempt" -ge 5 ]; then
+      echo "bootstrap: giving up on: $*" >&2
+      return 1
+    fi
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
+}
+
+# Amazon Linux 2023 ships Python 3.9; ansible-core 2.15 is the newest line
+# that still supports it as a controller.
+retry dnf install -y python3-pip
+retry python3 -m pip install --quiet "ansible-core>=2.15,<2.16"
+
+install -d -m 0755 /opt/bootstrap /etc/app-bootstrap
+retry aws s3api get-object \
+  --region "${region}" \
+  --bucket "${bundle_bucket}" \
+  --key "${bundle_key}" \
+  --version-id "${bundle_version_id}" \
+  /opt/bootstrap/bundle.zip >/dev/null
+
+rm -rf /opt/bootstrap/ansible
+python3 -m zipfile -e /opt/bootstrap/bundle.zip /opt/bootstrap/ansible
+
+(
+  umask 077
+  cat > /etc/app-bootstrap/vars.json <<'VARS'
+${vars_json}
+VARS
+)
+
+cd /opt/bootstrap/ansible
+export ANSIBLE_CONFIG=/opt/bootstrap/ansible/ansible.cfg
+/usr/local/bin/ansible-playbook site.yml \
+  --inventory localhost, \
+  --connection local \
+  --extra-vars ansible_python_interpreter=/usr/bin/python3 \
+  --extra-vars @/etc/app-bootstrap/vars.json
+
+echo "bootstrap: done $(date --iso-8601=seconds)"

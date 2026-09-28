@@ -1,0 +1,6 @@
+# Scripts that run on Linux must keep LF endings even when committed from Windows.
+*.sh      text eol=lf
+*.tftpl   text eol=lf
+*.j2      text eol=lf
+Makefile  text eol=lf
+Jenkinsfile text eol=lf

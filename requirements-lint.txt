@@ -1,0 +1,7 @@
+# Infrastructure linters used by `make lint-ansible lint-shell` (CI and local).
+# Hosts install ansible-core 2.15 separately in user data, because Amazon
+# Linux 2023 runs Python 3.9; the playbook sticks to ansible.builtin modules
+# that behave the same on both.
+ansible-core>=2.17
+ansible-lint>=25.1
+shellcheck-py>=0.10

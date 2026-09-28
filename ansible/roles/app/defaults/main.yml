@@ -1,0 +1,19 @@
+---
+# Supplied per environment by Terraform (vars.json); no defaults on purpose:
+#   app_image       <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<git-sha>
+#   app_log_group   CloudWatch Logs group for container output
+app_container_name: app
+app_env: dev
+app_port: 8080
+app_aws_region: us-east-1
+app_web_concurrency: 2
+app_nofile_limit: 65536
+
+# Empty db host = in-memory storage (the app still starts; /ready reports it).
+app_db_host: ""
+app_db_port: 5432
+app_db_name: app
+app_db_secret_arn: ""
+
+app_health_path: /health
+app_health_retries: 36   # x 5s = 3 minutes for pull + start

@@ -1,0 +1,51 @@
+---
+- name: Install diagnostic tooling
+  ansible.builtin.dnf:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Apply kernel network tuning
+  ansible.builtin.template:
+    src: sysctl.conf.j2
+    dest: /etc/sysctl.d/90-app.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl
+
+- name: Raise the open-file limit for login sessions
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/90-nofile.conf
+    content: |
+      # Managed by Ansible (role: base)
+      *    soft    nofile    {{ base_nofile_limit }}
+      *    hard    nofile    {{ base_nofile_limit }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Cap journald disk usage
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/90-size.conf
+    content: |
+      # Managed by Ansible (role: base)
+      [Journal]
+      SystemMaxUse={{ base_journald_max_use }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+- name: Keep the clock in sync (Amazon Time Sync Service)
+  ansible.builtin.systemd_service:
+    name: chronyd
+    enabled: true
+    state: started

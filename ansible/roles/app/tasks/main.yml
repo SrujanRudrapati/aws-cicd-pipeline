@@ -1,0 +1,61 @@
+---
+- name: Check required release variables
+  ansible.builtin.assert:
+    that:
+      - app_image is defined and app_image | length > 0
+      - app_log_group is defined and app_log_group | length > 0
+    fail_msg: app_image and app_log_group must be passed in (vars.json from Terraform).
+    quiet: true
+
+- name: Create app config directory
+  ansible.builtin.file:
+    path: /etc/app
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Write container environment
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: /etc/app/app.env
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart app
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: app.service.j2
+    dest: /etc/systemd/system/app.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart app
+
+- name: Install diagnostics wrapper
+  ansible.builtin.template:
+    src: app-diag.j2
+    dest: /usr/local/bin/app-diag
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Restart app now if its config changed
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start app
+  ansible.builtin.systemd_service:
+    name: app
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for the app to report healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ app_port }}{{ app_health_path }}"
+    status_code: 200
+  register: app_health
+  until: app_health.status == 200
+  retries: "{{ app_health_retries }}"
+  delay: 5

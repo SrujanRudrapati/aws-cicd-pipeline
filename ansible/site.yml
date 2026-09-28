@@ -1,0 +1,17 @@
+---
+# Host bootstrap for application instances.
+#
+# On EC2 this runs once at first boot from user data (see
+# terraform/modules/compute/templates/user_data.sh.tftpl):
+#   ansible-playbook site.yml -i localhost, -c local -e @/etc/app-bootstrap/vars.json
+#
+# Re-run it on a live host (e.g. over SSM Session Manager) to converge drift:
+#   cd /opt/bootstrap/ansible && sudo ansible-playbook site.yml -i localhost, -c local \
+#     -e @/etc/app-bootstrap/vars.json
+- name: Bootstrap application host
+  hosts: all
+  become: true
+  roles:
+    - role: base
+    - role: docker
+    - role: app
