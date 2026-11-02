@@ -2,7 +2,7 @@
 # Build context is the repository root:
 #   docker build -f app/Dockerfile --build-arg APP_VERSION=$(git rev-parse HEAD) .
 
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
@@ -10,7 +10,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY app/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 ARG APP_VERSION=dev
 LABEL org.opencontainers.image.source="https://github.com/SrujanRudrapati/aws-cicd-pipeline" \
       org.opencontainers.image.revision="${APP_VERSION}"
